@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
-# Mount static (after middleware)
+"""# Mount static (after middleware)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # Serve index.html as root
@@ -24,7 +24,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 async def serve_static(full_path: str):
     if full_path == "/":
         return FileResponse("static/index.html")
-    return FileResponse(f"static/{full_path}")
+    return FileResponse(f"static/{full_path}")"""
 
 app = FastAPI(title="Document Chat AI", version="1.0.0")
 
