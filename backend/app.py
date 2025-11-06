@@ -194,7 +194,12 @@ async def startup():
     logger.info("Upload → Ask → Magic")
     logger.info("═"*60 + "\n")
 
-if __name__ == "__main__":
+"""if __name__ == "__main__":
     import uvicorn
     #uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
-    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)), reload=False)
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)), reload=False)"""
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port, reload=False)
