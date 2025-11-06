@@ -197,9 +197,14 @@ async def startup():
 """if __name__ == "__main__":
     import uvicorn
     #uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
-    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)), reload=False)"""
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)), reload=False)
 
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port, reload=False)
+    uvicorn.run(app, host="0.0.0.0", port=port, reload=False)"""
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.getenv("PORT", 8000))  # Fallback to 8000
+    uvicorn.run(app, host="0.0.0.0", port=port, reload=False)  # No reload in prod
