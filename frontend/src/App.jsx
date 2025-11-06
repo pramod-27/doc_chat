@@ -6,7 +6,10 @@ import AnimatedLogo from "./components/AnimatedLogo";
 import LogoAnimation from "./components/LogoAnimation";
 import OrbitalRings from "./components/OrbitalRings";
 
+// FIXED: Use VITE_API_URL to match Vercel environment variable
 const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:8000";
+
+console.log("🌐 Backend URL:", backendUrl); // Debug log
 
 export default function App() {
   const [sessionId, setSessionId] = useState("");
@@ -21,13 +24,13 @@ export default function App() {
   const [showConfirmNewChat, setShowConfirmNewChat] = useState(false);
   const [progress, setProgress] = useState(0);
   const [animationStage, setAnimationStage] = useState("loading");
+  const [uploadError, setUploadError] = useState("");
 
   const recognitionRef = useRef(null);
   const synthRef = useRef(window.speechSynthesis);
   const speakingRef = useRef(null);
   const endRef = useRef(null);
   const logoHeaderRef = useRef(null);
-  
 
   useEffect(() => {
     const urlSession = new URLSearchParams(window.location.search).get("s");
@@ -50,6 +53,7 @@ export default function App() {
 
   const createSession = async () => {
     try {
+      console.log("📞 Creating session at:", `${backendUrl}/session`);
       const { data } = await axios.post(`${backendUrl}/session`);
       const sid = data.session_id;
       setSessionId(sid);
@@ -59,20 +63,24 @@ export default function App() {
       setFileName("");
       setReady(false);
       localStorage.removeItem(`messages_${sid}`);
-    } catch {
+      console.log("✅ Session created:", sid);
+    } catch (error) {
+      console.error("❌ Session creation failed:", error);
       setTimeout(createSession, 1000);
     }
   };
 
   const loadSessionInfo = async (sid) => {
     try {
+      console.log("📞 Loading session info for:", sid);
       const { data } = await axios.get(`${backendUrl}/session/info?session_id=${sid}`);
       setFileName(data.filename || "");
       setReady(data.ready || false);
       const savedMessages = localStorage.getItem(`messages_${sid}`);
       if (savedMessages) setMessages(JSON.parse(savedMessages));
-    } catch {
-      console.error("Failed to load session info");
+      console.log("✅ Session info loaded:", data);
+    } catch (error) {
+      console.error("❌ Failed to load session info:", error);
     }
   };
 
@@ -127,6 +135,7 @@ export default function App() {
     setThinking(true);
 
     try {
+      console.log("📞 Sending query:", q);
       const { data } = await axios.post(
         `${backendUrl}/query?session_id=${sessionId}`,
         { question: q }
@@ -154,7 +163,7 @@ export default function App() {
         if (index >= fullText.length) clearInterval(typingInterval);
       }, typingSpeed);
     } catch (error) {
-      console.error("Query error:", error);
+      console.error("❌ Query error:", error);
       setMessages((m) => [
         ...m,
         { role: "assistant", content: "Sorry, something went wrong. Try rephrasing your question." },
@@ -178,51 +187,83 @@ export default function App() {
   };
 
   const upload = async (file) => {
+    setUploadError("");
     const allowedTypes = [".pdf", ".docx", ".doc"];
     const fileExt = file.name.toLowerCase().slice(file.name.lastIndexOf("."));
+    
     if (!allowedTypes.includes(fileExt)) {
-      alert(`Unsupported file type: ${file.name}. Only PDF, DOCX, DOC allowed.`);
+      setUploadError(`Unsupported file type: ${file.name}. Only PDF, DOCX, DOC allowed.`);
       setProgress(0);
       return;
     }
 
+    // Check file size (50MB limit)
+    const maxSize = 50 * 1024 * 1024; // 50MB
+    if (file.size > maxSize) {
+      setUploadError(`File too large: ${(file.size / (1024 * 1024)).toFixed(2)}MB. Maximum 50MB allowed.`);
+      setProgress(0);
+      return;
+    }
+
+    console.log("📤 Uploading file:", {
+      name: file.name,
+      size: file.size,
+      sizeInMB: (file.size / (1024 * 1024)).toFixed(2) + " MB",
+      type: file.type
+    });
+
     setProgress(10);
     const fd = new FormData();
     fd.append("file", file);
+    
     try {
+      console.log("📞 Upload URL:", `${backendUrl}/upload?session_id=${sessionId}`);
       const { data } = await axios.post(`${backendUrl}/upload?session_id=${sessionId}`, fd, {
+        headers: {
+          // Don't set Content-Type - let browser set it with boundary
+        },
         onUploadProgress: (e) => {
-          if (e.total) setProgress(20 + Math.round((e.loaded * 70) / e.total));
+          if (e.total) {
+            const percentComplete = Math.round((e.loaded * 100) / e.total);
+            setProgress(20 + Math.round((percentComplete * 70) / 100));
+            console.log(`📊 Upload progress: ${percentComplete}%`);
+          }
         },
       });
 
+      console.log("✅ Upload successful:", data);
       const newSid = data.session_id || sessionId;
       setSessionId(newSid);
       localStorage.setItem("s", newSid);
       updateUrl(newSid);
+      
       const { data: info } = await axios.get(`${backendUrl}/session/info?session_id=${newSid}`);
       setFileName(info.filename || data.filename);
       setReady(info.ready || false);
       setMessages([]);
       setProgress(100);
+      
       setTimeout(() => {
         setShowUpload(false);
         setProgress(0);
       }, 800);
     } catch (error) {
-      alert(`Upload failed: ${error.response?.data?.detail || "Try a smaller file"}`);
+      console.error("❌ Upload error:", error);
+      const errorMsg = error.response?.data?.detail || error.message || "Upload failed. Try a smaller file.";
+      setUploadError(errorMsg);
       setProgress(0);
-      setShowUpload(false);
     }
   };
 
   const handleUploadClick = () => {
+    setUploadError("");
     if (fileName) setShowConfirmUpload(true);
     else setShowUpload(true);
   };
 
   const confirmUpload = () => {
     setShowConfirmUpload(false);
+    setUploadError("");
     setShowUpload(true);
   };
 
@@ -504,10 +545,17 @@ export default function App() {
           <div className="bg-zinc-900/80 backdrop-blur-2xl rounded-2xl p-8 w-full max-w-md border border-red-900/50 shadow-2xl ring-1 ring-white/10">
             <div className="flex justify-between items-center mb-6">
               <h2 className="text-2xl font-bold text-red-500">Upload Document</h2>
-              <button onClick={() => setShowUpload(false)} className="p-2 hover:bg-zinc-800 rounded-xl transition">
+              <button onClick={() => { setShowUpload(false); setUploadError(""); setProgress(0); }} className="p-2 hover:bg-zinc-800 rounded-xl transition">
                 <X className="w-6 h-6" />
               </button>
             </div>
+            
+            {uploadError && (
+              <div className="mb-4 p-4 bg-red-500/10 border border-red-500/50 rounded-xl">
+                <p className="text-red-400 text-sm">{uploadError}</p>
+              </div>
+            )}
+            
             {progress > 0 && (
               <div className="mb-6">
                 <div className="w-full h-3 bg-zinc-800 rounded-full overflow-hidden shadow-inner">
@@ -516,12 +564,14 @@ export default function App() {
                 <p className="text-center mt-3 text-sm font-bold text-red-500">{progress}%</p>
               </div>
             )}
+            
             <input
               type="file"
               accept=".pdf,.docx,.doc"
               onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])}
               className="block w-full text-sm text-gray-400 file:mr-4 file:py-3 file:px-8 file:rounded-xl file:border-0 file:bg-gradient-to-r file:from-red-600 file:to-pink-600 file:text-white file:font-bold hover:file:from-red-500 hover:file:to-pink-500 file:transition file:cursor-pointer cursor-pointer"
             />
+            <p className="text-xs text-gray-500 mt-3">Maximum file size: 50MB</p>
           </div>
         </div>
       )}

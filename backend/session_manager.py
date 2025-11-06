@@ -7,6 +7,7 @@ from typing import Dict, Any
 from pathlib import Path
 from dotenv import load_dotenv
 import logging
+import gc
 
 from pypdf import PdfReader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
@@ -139,6 +140,7 @@ class SessionManager:
             raise ValueError(f"Failed to process document: {str(e)}")
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
+        gc.collect()
 
     def query_session(self, session_id: str, question: str) -> str:
         session = self.get_session(session_id)

@@ -13,19 +13,6 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO, format='%(levelname)s:%(name)s:%(message)s')
 logger = logging.getLogger(__name__)
 
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
-
-"""# Mount static (after middleware)
-app.mount("/static", StaticFiles(directory="static"), name="static")
-
-# Serve index.html as root
-@app.get("/{full_path:path}", response_class=FileResponse)
-async def serve_static(full_path: str):
-    if full_path == "/":
-        return FileResponse("static/index.html")
-    return FileResponse(f"static/{full_path}")"""
-
 app = FastAPI(title="Document Chat AI", version="1.0.0")
 
 app.add_middleware(
@@ -42,7 +29,7 @@ class QueryRequest(BaseModel):
 def get_or_create_session_id(request: Request, response: Response, session_id: Optional[str] = None) -> str:
     """Auto-create session if missing; prioritize query/header/cookie"""
     if session_id and manager.get_session(session_id):
-        return session_id  # Use provided if valid
+        return session_id
     
     sid = request.headers.get("X-Session-ID")
     if not sid:
@@ -51,7 +38,6 @@ def get_or_create_session_id(request: Request, response: Response, session_id: O
     if sid and manager.get_session(sid):
         return sid
     
-    # Create new session
     sid = manager.create_session()
     logger.info(f"NEW SESSION: {sid[:8]}...")
     response.set_cookie(
@@ -67,7 +53,7 @@ def get_or_create_session_id(request: Request, response: Response, session_id: O
 async def root():
     return {
         "status": "ONLINE",
-        "message": "Document Chat AI is LIVE",
+        "message": "Document Chat AI is LIVE on Hugging Face Spaces",
         "sessions": len(manager.sessions)
     }
 
@@ -90,14 +76,13 @@ async def get_session_info(
     request: Request = None,
     response: Response = None
 ):
-    """Get session info - CRITICAL ENDPOINT"""
+    """Get session info"""
     try:
         sid = get_or_create_session_id(request, response, session_id)
         info = manager.get_session_info(sid)
         return info
     except Exception as e:
         logger.error(f"Session info error: {e}")
-        # Don't fail - return empty info
         return {
             "session_id": "",
             "filename": "",
@@ -183,28 +168,19 @@ async def query_document(
 async def health():
     return {
         "status": "healthy",
-        "sessions": len(manager.sessions)
+        "sessions": len(manager.sessions),
+        "platform": "Hugging Face Spaces"
     }
 
 @app.on_event("startup")
 async def startup():
-    logger.info("\n" + "═"*60)
-    logger.info("DOCUMENT CHAT AI IS LIVE")
-    logger.info("http://localhost:8000")
-    logger.info("Upload → Ask → Magic")
-    logger.info("═"*60 + "\n")
-
-"""if __name__ == "__main__":
-    import uvicorn
-    #uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
-    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)), reload=False)
+    logger.info("\n" + "="*60)
+    logger.info("🚀 DOCUMENT CHAT AI IS LIVE ON HUGGING FACE SPACES 🚀")
+    logger.info("="*60 + "\n")
 
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.environ.get("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port, reload=False)"""
-
-if __name__ == "__main__":
-    import uvicorn
-    port = int(os.getenv("PORT", 8000))  # Fallback to 8000
-    uvicorn.run(app, host="0.0.0.0", port=port, reload=False)  # No reload in prod
+    import os
+    port = int(os.getenv("PORT", 7860))  # HF Spaces uses port 7860
+    logger.info(f"Starting server on port {port}")
+    uvicorn.run(app, host="0.0.0.0", port=port, reload=False)
