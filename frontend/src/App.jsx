@@ -1,3 +1,4 @@
+// frontend/src/App.jsx
 import { useState, useEffect, useRef, useCallback } from "react";
 import axios from "axios";
 import { Upload, X, Volume2, VolumeX, Mic, Send, Plus } from "lucide-react";
@@ -22,6 +23,7 @@ export default function App() {
   const [progress, setProgress] = useState(0);
   const [animationStage, setAnimationStage] = useState("loading");
   const [uploadError, setUploadError] = useState("");
+  const [isLoadingSession, setIsLoadingSession] = useState(true);
 
   const recognitionRef = useRef(null);
   const synthRef = useRef(window.speechSynthesis);
@@ -29,6 +31,7 @@ export default function App() {
   const endRef = useRef(null);
   const logoHeaderRef = useRef(null);
   const messagesContainerRef = useRef(null);
+  const bottomRef = useRef(null);
 
   // Use useCallback to prevent unnecessary re-renders
   const stableSetMessages = useCallback((updater) => {
@@ -38,25 +41,57 @@ export default function App() {
     });
   }, []);
 
+  // Enhanced persistence logic: Check localStorage first, then URL, handle invalid sessions
   useEffect(() => {
-    const urlSession = new URLSearchParams(window.location.search).get("s");
-    if (urlSession) {
-      setSessionId(urlSession);
-      loadSessionInfo(urlSession);
-    } else {
-      localStorage.removeItem("s");
-      createSession();
-    }
+    const loadOrCreateSession = async () => {
+      setIsLoadingSession(true);
+      let sid = localStorage.getItem("s");
+      const urlSession = new URLSearchParams(window.location.search).get("s");
+      if (!sid && urlSession) {
+        sid = urlSession;
+        localStorage.setItem("s", sid);
+      }
+      
+      if (sid) {
+        try {
+          // Validate session with backend
+          const { data } = await axios.get(`${backendUrl}/session/info?session_id=${sid}`);
+          if (data.session_id) { // Valid session
+            setSessionId(sid);
+            setFileName(data.filename || "");
+            setReady(data.ready || false);
+            const savedMessages = localStorage.getItem(`messages_${sid}`);
+            if (savedMessages) {
+              stableSetMessages(JSON.parse(savedMessages));
+            }
+          } else {
+            // Invalid/expired session: create new
+            throw new Error("Invalid session");
+          }
+        } catch (error) {
+          console.warn("Session invalid, creating new:", error);
+          localStorage.removeItem("s");
+          createSession();
+          return;
+        }
+      } else {
+        createSession();
+      }
+      setIsLoadingSession(false);
+    };
+
+    loadOrCreateSession();
     setupSpeech();
     return () => synthRef.current.cancel();
   }, []);
 
-  // Fixed scrolling - only scroll when new messages are added
+  // Auto-scroll to bottom on messages change
   useEffect(() => {
-    if (messagesContainerRef.current) {
-      messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
-    }
-  }, [messages.length]); // Only depend on messages length, not content
+    const scrollToBottom = () => {
+      bottomRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
+    };
+    scrollToBottom();
+  }, [messages]);
 
   const createSession = async () => {
     try {
@@ -69,7 +104,7 @@ export default function App() {
       setFileName("");
       setReady(false);
       localStorage.removeItem(`messages_${sid}`);
-      loadSessionInfo(sid);
+      setIsLoadingSession(false);
     } catch (error) {
       console.error("Session creation failed:", error);
       setTimeout(createSession, 1000);
@@ -97,6 +132,7 @@ export default function App() {
     window.history.replaceState({}, "", url);
   };
 
+  // Persist messages to localStorage on change
   useEffect(() => {
     if (sessionId) {
       localStorage.setItem(`messages_${sessionId}`, JSON.stringify(messages));
@@ -134,12 +170,16 @@ export default function App() {
     }
   };
 
+  const scrollToBottom = useCallback(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
+  }, []);
+
   const sendQuery = async () => {
     if (!input.trim() || thinking) return;
     const q = input.trim();
     setInput("");
     
-    // Add user message immediately with unique ID
+    // Add user message immediately with unique ID and scroll
     const userMessage = { 
       role: "user", 
       content: q, 
@@ -147,6 +187,7 @@ export default function App() {
     };
     
     stableSetMessages(prev => [...prev, userMessage]);
+    setTimeout(scrollToBottom, 0);
     setThinking(true);
 
     try {
@@ -162,15 +203,16 @@ export default function App() {
         updateUrl(data.session_id);
       }
 
-      // Add assistant message with empty content first
+      // Add assistant message with empty content first and scroll
       const assistantMessageId = Date.now() + Math.random() + 1;
       stableSetMessages(prev => [...prev, { 
         role: "assistant", 
         content: "", 
         id: assistantMessageId
       }]);
+      setTimeout(scrollToBottom, 0);
 
-      // Typewriter effect
+      // Typewriter effect with scroll after small delay each time
       let displayedText = "";
       const typingSpeed = 20;
 
@@ -183,7 +225,13 @@ export default function App() {
             ? { ...msg, content: displayedText }
             : msg
         ));
+
+        // Scroll after each character with small delay
+        setTimeout(scrollToBottom, 10);
       }
+
+      // Final scroll after loop
+      setTimeout(scrollToBottom, 50);
 
     } catch (error) {
       console.error("Query error:", error);
@@ -196,6 +244,7 @@ export default function App() {
         content: errorMsg, 
         id: Date.now() + Math.random()
       }]);
+      setTimeout(scrollToBottom, 0);
     } finally {
       setThinking(false);
     }
@@ -304,7 +353,7 @@ export default function App() {
   // Message Bubble Component - Netflix Theme
   const MessageBubble = ({ message }) => (
     <div key={message.id} className={`flex ${message.role === "user" ? "justify-end" : "justify-start"} mb-4`}>
-      <div className={`relative max-w-[85vw] sm:max-w-[75vw] md:max-w-[65vw] lg:max-w-[50vw] px-4 py-3 rounded-2xl ${
+      <div className={`relative max-w-[85vw] sm:max-w-[75vw] md:max-w-[65vw] lg:max-w-[50vw] px-3 py-2 sm:px-4 sm:py-3 rounded-2xl ${
         message.role === "user" 
           ? "bg-gradient-to-r from-red-500/90 to-pink-500/90 text-white shadow-lg" 
           : "bg-gradient-to-r from-gray-800 to-gray-900 text-white shadow-lg border border-gray-600/30"
@@ -391,7 +440,8 @@ export default function App() {
     </div>
   );
 
-  if (animationStage === "loading" || animationStage === "transitioning") {
+  // Show loading spinner while initializing session
+  if (isLoadingSession || animationStage === "loading" || animationStage === "transitioning") {
     return (
       <>
         <LogoAnimation onStageChange={handleLogoAnimationStage} />
@@ -400,32 +450,32 @@ export default function App() {
             <OrbitalRings />
 
             <header className="sticky top-0 z-50 bg-black/95 backdrop-blur-xl border-b border-red-900/50">
-              <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 flex justify-between items-center">
-                <div className="flex items-center gap-3">
+              <div className="max-w-7xl mx-auto px-2 sm:px-4 sm:px-6 py-3 flex justify-between items-center flex-wrap gap-2">
+                <div className="flex items-center gap-3 flex-1 min-w-0">
                   <div ref={logoHeaderRef} data-logo-target="true">
                     <AnimatedLogo inHeader={true} isTransitioning={true} />
                   </div>
-                  <div>
-                    <h1 className="text-lg sm:text-xl font-bold text-red-500">File Chat AI</h1>
-                    <p className="text-xs text-gray-400">
+                  <div className="min-w-0 flex-1">
+                    <h1 className="text-base sm:text-lg sm:text-xl font-bold text-red-500 truncate">File Chat AI</h1>
+                    <p className="text-xs text-gray-400 truncate">
                       {fileName || "No file loaded"}
                     </p>
                   </div>
                 </div>
-                <div className="flex gap-3">
+                <div className="flex gap-2 sm:gap-3 flex-shrink-0">
                   {/* Text buttons instead of icons */}
                   <button
                     onClick={startNewChat}
-                    className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 rounded-lg transition-all text-sm font-medium flex items-center gap-2"
+                    className="px-3 py-2 sm:px-4 sm:py-2 bg-zinc-800 hover:bg-zinc-700 rounded-lg transition-all text-xs sm:text-sm font-medium flex items-center gap-2 min-w-[80px] justify-center"
                   >
-                    <Plus className="w-4 h-4" />
+                    <Plus className="w-3 h-3 sm:w-4 sm:h-4" />
                     New Chat
                   </button>
                   <button
                     onClick={handleUploadClick}
-                    className="px-4 py-2 bg-gradient-to-r from-red-600 to-pink-600 hover:from-red-500 hover:to-pink-500 rounded-lg transition-all text-sm font-bold flex items-center gap-2"
+                    className="px-3 py-2 sm:px-4 sm:py-2 bg-gradient-to-r from-red-600 to-pink-600 hover:from-red-500 hover:to-pink-500 rounded-lg transition-all text-xs sm:text-sm font-bold flex items-center gap-2 min-w-[80px] justify-center"
                   >
-                    <Upload className="w-4 h-4" />
+                    <Upload className="w-3 h-3 sm:w-4 sm:h-4" />
                     Upload
                   </button>
                 </div>
@@ -433,10 +483,17 @@ export default function App() {
             </header>
 
             <div className="flex-1 flex items-center justify-center">
-              <EmptyState />
+              {isLoadingSession ? (
+                <div className="text-center">
+                  <div className="w-8 h-8 sm:w-12 sm:h-12 mx-auto mb-4 border-4 border-red-500 border-t-transparent rounded-full animate-spin" />
+                  <p className="text-gray-400">Loading session...</p>
+                </div>
+              ) : (
+                <EmptyState />
+              )}
             </div>
 
-            <div className="p-4 bg-black/95 backdrop-blur-xl border-t border-red-900/50">
+            <div className="p-2 sm:p-4 bg-black/95 backdrop-blur-xl border-t border-red-900/50">
               <div className="max-w-4xl mx-auto">
                 <div className="relative">
                   <input
@@ -445,18 +502,19 @@ export default function App() {
                     onChange={(e) => setInput(e.target.value)}
                     onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && sendQuery()}
                     placeholder={ready ? "Ask anything about your document..." : "Upload a document to begin..."}
-                    className="w-full px-4 py-3 pr-20 bg-zinc-900/90 backdrop-blur border border-zinc-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-red-500 text-sm placeholder-gray-500 transition-all"
+                    disabled={thinking || isLoadingSession}
+                    className="w-full px-3 py-2.5 sm:px-4 sm:py-3 pr-16 sm:pr-20 bg-zinc-900/90 backdrop-blur border border-zinc-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-red-500 text-sm placeholder-gray-500 transition-all"
                   />
-                  <div className="absolute right-2 top-1/2 -translate-y-1/2 flex gap-1">
-                    <button onClick={toggleMic} className="p-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 transition">
-                      <Mic className="w-4 h-4" />
+                  <div className="absolute right-1.5 top-1/2 -translate-y-1/2 flex gap-1 sm:gap-1 sm:right-2">
+                    <button onClick={toggleMic} disabled={thinking || isLoadingSession} className="p-1.5 sm:p-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 transition">
+                      <Mic className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                     </button>
                     <button
                       onClick={sendQuery}
-                      disabled={!input.trim() || thinking}
-                      className="p-2 rounded-lg bg-gradient-to-r from-red-600 to-pink-600 hover:from-red-500 hover:to-pink-500 disabled:opacity-40 transition"
+                      disabled={!input.trim() || thinking || isLoadingSession}
+                      className="p-1.5 sm:p-2 rounded-lg bg-gradient-to-r from-red-600 to-pink-600 hover:from-red-500 hover:to-pink-500 disabled:opacity-40 transition"
                     >
-                      <Send className="w-4 h-4" />
+                      <Send className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                     </button>
                   </div>
                 </div>
@@ -464,7 +522,7 @@ export default function App() {
             </div>
           </div>
         )}
-      </>
+      </> 
     );
   }
 
@@ -476,32 +534,32 @@ export default function App() {
       </div>
 
       <header className="sticky top-0 z-50 bg-black/95 backdrop-blur-2xl border-b border-red-900/50 shadow-2xl">
-        <div className="max-w-7xl mx-auto px-4 py-3 flex justify-between items-center">
-          <div className="flex items-center gap-3">
+        <div className="max-w-7xl mx-auto px-2 sm:px-4 sm:px-6 py-3 flex justify-between items-center flex-wrap gap-2">
+          <div className="flex items-center gap-3 flex-1 min-w-0">
             <div ref={logoHeaderRef} data-logo-target="true">
               <AnimatedLogo inHeader={true} />
             </div>
             <div className="min-w-0 flex-1">
-              <h1 className="text-lg font-bold text-red-500 truncate">File Chat AI</h1>
+              <h1 className="text-base sm:text-lg sm:text-xl font-bold text-red-500 truncate">File Chat AI</h1>
               <p className="text-xs text-gray-400 truncate">
                 {fileName || "Ready to chat with your documents"}
               </p>
             </div>
           </div>
-          <div className="flex gap-3">
+          <div className="flex gap-2 sm:gap-3 flex-shrink-0">
             {/* Text buttons instead of icons */}
             <button
               onClick={startNewChat}
-              className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 rounded-lg transition-all text-sm font-medium flex items-center gap-2"
+              className="px-3 py-2 sm:px-4 sm:py-2 bg-zinc-800 hover:bg-zinc-700 rounded-lg transition-all text-xs sm:text-sm font-medium flex items-center gap-2 min-w-[80px] justify-center"
             >
-              <Plus className="w-4 h-4" />
+              <Plus className="w-3 h-3 sm:w-4 sm:h-4" />
               New Chat
             </button>
             <button
               onClick={handleUploadClick}
-              className="px-4 py-2 bg-gradient-to-r from-red-600 to-pink-600 hover:from-red-500 hover:to-pink-500 rounded-lg transition-all text-sm font-bold flex items-center gap-2"
+              className="px-3 py-2 sm:px-4 sm:py-2 bg-gradient-to-r from-red-600 to-pink-600 hover:from-red-500 hover:to-pink-500 rounded-lg transition-all text-xs sm:text-sm font-bold flex items-center gap-2 min-w-[80px] justify-center"
             >
-              <Upload className="w-4 h-4" />
+              <Upload className="w-3 h-3 sm:w-4 sm:h-4" />
               Upload
             </button>
           </div>
@@ -517,14 +575,14 @@ export default function App() {
           {messages.length === 0 ? (
             <EmptyState />
           ) : (
-            <div className="px-4 py-4">
+            <div className="px-2 sm:px-4 py-4">
               {messages.map((message) => (
                 <MessageBubble key={message.id} message={message} />
               ))}
               
               {thinking && (
                 <div className="flex justify-start mb-4">
-                  <div className="px-4 py-3 rounded-2xl bg-white/5 backdrop-blur-xl border border-white/10">
+                  <div className="px-3 py-2 sm:px-4 sm:py-3 rounded-2xl bg-white/5 backdrop-blur-xl border border-white/10">
                     <div className="flex gap-2">
                       <div className="w-2 h-2 bg-red-500 rounded-full animate-bounce" />
                       <div className="w-2 h-2 bg-red-500 rounded-full animate-bounce delay-100" />
@@ -533,6 +591,7 @@ export default function App() {
                   </div>
                 </div>
               )}
+              <div ref={bottomRef} />
             </div>
           )}
         </div>
@@ -559,7 +618,7 @@ export default function App() {
         </div>
       )}
 
-      <div className="sticky bottom-0 z-40 p-4 bg-black/95 backdrop-blur-2xl border-t border-red-900/50">
+      <div className="sticky bottom-0 z-40 p-2 sm:p-4 bg-black/95 backdrop-blur-2xl border-t border-red-900/50">
         <div className="max-w-4xl mx-auto">
           <div className="relative">
             <input
@@ -569,22 +628,22 @@ export default function App() {
               onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && sendQuery()}
               placeholder={ready ? "Ask anything about your document..." : "Upload a document to begin chatting..."}
               disabled={thinking}
-              className="w-full px-4 py-3 pr-20 bg-zinc-900/90 backdrop-blur-xl border border-zinc-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-red-500 text-sm placeholder-gray-500 transition-all shadow-2xl"
+              className="w-full px-3 py-2.5 sm:px-4 sm:py-3 pr-16 sm:pr-20 bg-zinc-900/90 backdrop-blur-xl border border-zinc-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-red-500 text-sm placeholder-gray-500 transition-all shadow-2xl"
             />
-            <div className="absolute right-2 top-1/2 -translate-y-1/2 flex gap-2">
+            <div className="absolute right-1.5 top-1/2 -translate-y-1/2 flex gap-1 sm:gap-2 sm:right-2">
               <button 
                 onClick={toggleMic} 
                 disabled={thinking}
-                className="p-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 transition disabled:opacity-40 shadow-lg"
+                className="p-1.5 sm:p-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 transition disabled:opacity-40 shadow-lg"
               >
-                <Mic className="w-4 h-4" />
+                <Mic className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
               </button>
               <button
                 onClick={sendQuery}
                 disabled={!input.trim() || thinking}
-                className="p-2 rounded-lg bg-gradient-to-r from-red-600 to-pink-600 hover:from-red-500 hover:to-pink-500 disabled:opacity-40 transition shadow-lg"
+                className="p-1.5 sm:p-2 rounded-lg bg-gradient-to-r from-red-600 to-pink-600 hover:from-red-500 hover:to-pink-500 disabled:opacity-40 transition shadow-lg"
               >
-                <Send className="w-4 h-4" />
+                <Send className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
               </button>
             </div>
           </div>
@@ -594,14 +653,14 @@ export default function App() {
       {/* MODALS */}
       {showConfirmUpload && (
         <div className="fixed inset-0 bg-black/90 flex items-center justify-center z-50 p-4">
-          <div className="bg-zinc-900/80 backdrop-blur-2xl rounded-2xl p-6 max-w-sm w-full border border-red-900/50 shadow-2xl">
-            <h3 className="text-xl font-bold text-red-500 mb-4">Replace Document?</h3>
-            <p className="text-gray-300 mb-6">This will erase your current file and chat history.</p>
-            <div className="flex gap-3 justify-end">
-              <button onClick={() => setShowConfirmUpload(false)} className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 rounded-lg text-sm transition">
+          <div className="bg-zinc-900/80 backdrop-blur-2xl rounded-2xl p-4 sm:p-6 max-w-sm w-full border border-red-900/50 shadow-2xl">
+            <h3 className="text-lg sm:text-xl font-bold text-red-500 mb-4">Replace Document?</h3>
+            <p className="text-gray-300 mb-6 text-sm">This will erase your current file and chat history.</p>
+            <div className="flex gap-3 justify-end flex-wrap">
+              <button onClick={() => setShowConfirmUpload(false)} className="px-3 py-2 sm:px-4 sm:py-2 bg-zinc-800 hover:bg-zinc-700 rounded-lg text-sm transition flex-1 sm:flex-none">
                 Cancel
               </button>
-              <button onClick={confirmUpload} className="px-4 py-2 bg-gradient-to-r from-red-600 to-pink-600 hover:from-red-500 hover:to-pink-500 rounded-lg text-sm font-bold transition">
+              <button onClick={confirmUpload} className="px-3 py-2 sm:px-4 sm:py-2 bg-gradient-to-r from-red-600 to-pink-600 hover:from-red-500 hover:to-pink-500 rounded-lg text-sm font-bold transition flex-1 sm:flex-none">
                 Replace
               </button>
             </div>
@@ -611,11 +670,11 @@ export default function App() {
 
       {showUpload && (
         <div className="fixed inset-0 bg-black/90 flex items-center justify-center z-50 p-4">
-          <div className="bg-zinc-900/80 backdrop-blur-2xl rounded-2xl p-6 w-full max-w-sm border border-red-900/50 shadow-2xl">
+          <div className="bg-zinc-900/80 backdrop-blur-2xl rounded-2xl p-4 sm:p-6 w-full max-w-sm border border-red-900/50 shadow-2xl">
             <div className="flex justify-between items-center mb-6">
-              <h2 className="text-xl font-bold text-red-500">Upload Document</h2>
-              <button onClick={() => { setShowUpload(false); setUploadError(""); setProgress(0); }} className="p-2 hover:bg-zinc-800 rounded-lg transition">
-                <X className="w-5 h-5" />
+              <h2 className="text-lg sm:text-xl font-bold text-red-500">Upload Document</h2>
+              <button onClick={() => { setShowUpload(false); setUploadError(""); setProgress(0); }} className="p-1.5 sm:p-2 hover:bg-zinc-800 rounded-lg transition">
+                <X className="w-4 h-4 sm:w-5 sm:h-5" />
               </button>
             </div>
             
@@ -647,14 +706,14 @@ export default function App() {
 
       {showConfirmNewChat && (
         <div className="fixed inset-0 bg-black/90 flex items-center justify-center z-50 p-4">
-          <div className="bg-zinc-900/80 backdrop-blur-2xl rounded-2xl p-6 max-w-sm w-full border border-red-900/50 shadow-2xl">
-            <h3 className="text-xl font-bold text-red-500 mb-4">Start Fresh?</h3>
-            <p className="text-gray-300 mb-6">This will clear all messages and the current document.</p>
-            <div className="flex gap-3 justify-end">
-              <button onClick={() => setShowConfirmNewChat(false)} className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 rounded-lg text-sm transition">
+          <div className="bg-zinc-900/80 backdrop-blur-2xl rounded-2xl p-4 sm:p-6 max-w-sm w-full border border-red-900/50 shadow-2xl">
+            <h3 className="text-lg sm:text-xl font-bold text-red-500 mb-4">Start Fresh?</h3>
+            <p className="text-gray-300 mb-6 text-sm">This will clear all messages and the current document.</p>
+            <div className="flex gap-3 justify-end flex-wrap">
+              <button onClick={() => setShowConfirmNewChat(false)} className="px-3 py-2 sm:px-4 sm:py-2 bg-zinc-800 hover:bg-zinc-700 rounded-lg text-sm transition flex-1 sm:flex-none">
                 Cancel
               </button>
-              <button onClick={confirmNewChat} className="px-4 py-2 bg-gradient-to-r from-red-600 to-pink-600 hover:from-red-500 hover:to-pink-500 rounded-lg text-sm font-bold transition">
+              <button onClick={confirmNewChat} className="px-3 py-2 sm:px-4 sm:py-2 bg-gradient-to-r from-red-600 to-pink-600 hover:from-red-500 hover:to-pink-500 rounded-lg text-sm font-bold transition flex-1 sm:flex-none">
                 New Chat
               </button>
             </div>
