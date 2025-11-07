@@ -32,6 +32,7 @@ export default function App() {
   const logoHeaderRef = useRef(null);
   const messagesContainerRef = useRef(null);
   const bottomRef = useRef(null);
+  const inputRef = useRef(null);
 
   // Use useCallback to prevent unnecessary re-renders
   const stableSetMessages = useCallback((updater) => {
@@ -40,6 +41,14 @@ export default function App() {
       return newMessages;
     });
   }, []);
+
+  // Auto-resize textarea height
+  useEffect(() => {
+    if (inputRef.current) {
+      inputRef.current.style.height = 'auto';
+      inputRef.current.style.height = Math.min(inputRef.current.scrollHeight, 128) + 'px';
+    }
+  }, [input]);
 
   // Enhanced persistence logic: Check localStorage first, then URL, handle invalid sessions
   useEffect(() => {
@@ -173,6 +182,13 @@ export default function App() {
   const scrollToBottom = useCallback(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
   }, []);
+
+  const handleKeyDown = (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      sendQuery();
+    }
+  };
 
   const sendQuery = async () => {
     if (!input.trim() || thinking) return;
@@ -496,14 +512,14 @@ export default function App() {
             <div className="p-2 sm:p-4 bg-black/95 backdrop-blur-xl border-t border-red-900/50">
               <div className="max-w-4xl mx-auto">
                 <div className="relative">
-                  <input
-                    type="text"
+                  <textarea
+                    ref={inputRef}
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && sendQuery()}
+                    onKeyDown={handleKeyDown}
                     placeholder={ready ? "Ask anything about your document..." : "Upload a document to begin..."}
                     disabled={thinking || isLoadingSession}
-                    className="w-full px-3 py-2.5 sm:px-4 sm:py-3 pr-16 sm:pr-20 bg-zinc-900/90 backdrop-blur border border-zinc-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-red-500 text-sm placeholder-gray-500 transition-all"
+                    className="w-full px-3 py-2.5 sm:px-4 sm:py-3 pr-16 sm:pr-20 bg-zinc-900/90 backdrop-blur border border-zinc-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-red-500 text-sm placeholder-gray-500 transition-all resize-none overflow-hidden min-h-[44px] max-h-32"
                   />
                   <div className="absolute right-1.5 top-1/2 -translate-y-1/2 flex gap-1 sm:gap-1 sm:right-2">
                     <button onClick={toggleMic} disabled={thinking || isLoadingSession} className="p-1.5 sm:p-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 transition">
@@ -621,14 +637,14 @@ export default function App() {
       <div className="sticky bottom-0 z-40 p-2 sm:p-4 bg-black/95 backdrop-blur-2xl border-t border-red-900/50">
         <div className="max-w-4xl mx-auto">
           <div className="relative">
-            <input
-              type="text"
+            <textarea
+              ref={inputRef}
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && sendQuery()}
+              onKeyDown={handleKeyDown}
               placeholder={ready ? "Ask anything about your document..." : "Upload a document to begin chatting..."}
               disabled={thinking}
-              className="w-full px-3 py-2.5 sm:px-4 sm:py-3 pr-16 sm:pr-20 bg-zinc-900/90 backdrop-blur-xl border border-zinc-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-red-500 text-sm placeholder-gray-500 transition-all shadow-2xl"
+              className="w-full px-3 py-2.5 sm:px-4 sm:py-3 pr-16 sm:pr-20 bg-zinc-900/90 backdrop-blur-xl border border-zinc-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-red-500 text-sm placeholder-gray-500 transition-all shadow-2xl resize-none overflow-hidden min-h-[44px] max-h-32"
             />
             <div className="absolute right-1.5 top-1/2 -translate-y-1/2 flex gap-1 sm:gap-2 sm:right-2">
               <button 

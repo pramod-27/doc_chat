@@ -12,3 +12,4 @@ python-multipart==0.0.12
 python-dotenv==1.0.1
 pydantic==2.10.3
 cryptography<42
+psutil==5.9.8
