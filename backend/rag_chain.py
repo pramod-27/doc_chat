@@ -6,30 +6,41 @@ from langchain_core.prompts import PromptTemplate
 import os
 import re
 from dotenv import load_dotenv
+import logging
 
 load_dotenv()
+logger = logging.getLogger(__name__)
 
 def clean_response(text: str) -> str:
     """Remove ALL markdown junk — asterisks, hashes, backticks, etc."""
+    if not text:
+        return "I apologize, but I couldn't generate a response. Please try again."
+    
     text = re.sub(r'\*\*|\*|\#|\`|\_|\~|\>|\|', '', text)
     text = re.sub(r'\n{3,}', '\n\n', text)  # Remove extra newlines
     text = text.strip()
+    
+    # Ensure response isn't empty after cleaning
+    if not text:
+        return "I apologize, but my response was empty. Please try rephrasing your question."
+    
     return text
 
 def create_rag_chain(vectorstore):
-    retriever = vectorstore.as_retriever(
-        search_type="similarity",
-        search_kwargs={"k": 6}
-    )
-    
-    llm = ChatGroq(
-        api_key=os.getenv("GROQ_API_KEY"),
-        model="llama-3.1-8b-instant",
-        temperature=0.2,
-        max_tokens=1024
-    )
-    
-    template = """You are a helpful document assistant. You help users understand and explore the content of their uploaded document (PDF, DOCX, or DOC).
+    try:
+        retriever = vectorstore.as_retriever(
+            search_type="similarity",
+            search_kwargs={"k": 6}
+        )
+        
+        llm = ChatGroq(
+            api_key=os.getenv("GROQ_API_KEY"),
+            model="llama-3.1-8b-instant",
+            temperature=0.2,
+            max_tokens=1024
+        )
+        
+        template = """You are a helpful document assistant. You help users understand and explore the content of their uploaded document (PDF, DOCX, or DOC).
 
 Analyze the question carefully before responding:
 
@@ -57,24 +68,31 @@ Question: {question}
 
 Response:"""
 
-    prompt = PromptTemplate.from_template(template)
-    
-    def format_docs(docs):
-        lines = []
-        for doc in docs:
-            page = doc.metadata.get('page', '?')
-            text = doc.page_content.strip()
-            # Strip all formatting from source
-            text = re.sub(r'\*\*|\*|\#|\`|\_|\~|\>|\|', '', text)
-            lines.append(f"• Page {page}: {text}")
-        return "\n".join(lines)
-    
-    rag_chain = (
-        {"context": retriever | format_docs, "question": RunnablePassthrough()}
-        | prompt
-        | llm
-        | StrOutputParser()
-        | clean_response  # FINAL CLEANER
-    )
-    
-    return rag_chain
+        prompt = PromptTemplate.from_template(template)
+        
+        def format_docs(docs):
+            if not docs:
+                return "No relevant context found in the document."
+                
+            lines = []
+            for doc in docs:
+                page = doc.metadata.get('page', '?')
+                text = doc.page_content.strip()
+                # Strip all formatting from source
+                text = re.sub(r'\*\*|\*|\#|\`|\_|\~|\>|\|', '', text)
+                lines.append(f"• Page {page}: {text}")
+            return "\n".join(lines)
+        
+        rag_chain = (
+            {"context": retriever | format_docs, "question": RunnablePassthrough()}
+            | prompt
+            | llm
+            | StrOutputParser()
+            | clean_response  # FINAL CLEANER
+        )
+        
+        return rag_chain
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to create RAG chain: {e}")
+        raise

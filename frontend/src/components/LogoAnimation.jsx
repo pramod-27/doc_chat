@@ -1,4 +1,3 @@
-// src/components/LogoAnimation.jsx
 import { useState, useEffect, useRef } from "react";
 
 const LogoAnimation = ({ onStageChange }) => {
@@ -10,8 +9,9 @@ const LogoAnimation = ({ onStageChange }) => {
     targetRef.current = document.querySelector("[data-logo-target]");
   }, []);
 
+  // Faster animation sequence
   useEffect(() => {
-    const timer = setTimeout(() => setStage("pulse"), 1800);
+    const timer = setTimeout(() => setStage("pulse"), 1200);
     return () => clearTimeout(timer);
   }, []);
 
@@ -20,7 +20,7 @@ const LogoAnimation = ({ onStageChange }) => {
       const timer = setTimeout(() => {
         setStage("transition");
         onStageChange("transitioning");
-      }, 1200);
+      }, 800);
       return () => clearTimeout(timer);
     }
   }, [stage, onStageChange]);
@@ -30,17 +30,17 @@ const LogoAnimation = ({ onStageChange }) => {
       const timer = setTimeout(() => {
         setStage("complete");
         onStageChange("complete");
-      }, 1400);
+      }, 600);
       return () => clearTimeout(timer);
     }
   }, [stage, onStageChange]);
 
-  // TUDUM SOUND
+  // Optional: Sound effect (commented out for better UX)
   useEffect(() => {
     if (stage === "pulse") {
-      const audio = new Audio("/tudum.mp3");
-      audio.volume = 0.7;
-      audio.play().catch(() => {});
+      // const audio = new Audio("/tudum.mp3");
+      // audio.volume = 0.5;
+      // audio.play().catch(() => {});
     }
   }, [stage]);
 
@@ -50,7 +50,7 @@ const LogoAnimation = ({ onStageChange }) => {
 
   const getTargetRect = () => {
     if (!targetRef.current) {
-      return { top: 16, left: 16, width: 40, height: 40 };
+      return { top: 16, left: 16, width: 32, height: 32 };
     }
     const rect = targetRef.current.getBoundingClientRect();
     return {
@@ -65,26 +65,24 @@ const LogoAnimation = ({ onStageChange }) => {
 
   return (
     <div className="fixed inset-0 z-[100] overflow-hidden bg-black">
-      {/* Softer, whiter background */}
       <div className="absolute inset-0 bg-gradient-to-br from-red-950 via-black to-red-900" />
-      <div className="absolute inset-0 bg-gradient-radial from-red/10 blur-3xl animate-pulse-slow" />
-
-      {/* Subtle white pulse rings */}
+      
+      {/* Subtle pulse rings - smaller on mobile */}
       {stage === "pulse" && (
         <div className="absolute inset-0 flex items-center justify-center">
-          <div className="w-32 h-32 rounded-full border-8 border-red/30 animate-expand-ring" />
-          <div className="absolute w-40 h-40 rounded-full border-4 border-red/20 animate-expand-ring" style={{ animationDelay: "0.2s" }} />
+          <div className="w-24 h-24 sm:w-32 sm:h-32 rounded-full border-4 border-red-400/20 animate-expand-ring" />
+          <div className="absolute w-32 h-32 sm:w-40 sm:h-40 rounded-full border-2 border-red-400/10 animate-expand-ring" style={{ animationDelay: "0.2s" }} />
         </div>
       )}
 
       <div
         ref={logoRef}
-        className="absolute transition-all duration-1000 ease-out"
+        className="absolute transition-all duration-500 ease-out"
         style={
           isTransitioning
             ? {
-                top: target.top + target.height / 2 - 20,
-                left: target.left + target.width / 2 - 20,
+                top: target.top + target.height / 2 - 16,
+                left: target.left + target.width / 2 - 16,
                 transform: "translate(0, 0)",
               }
             : {
@@ -95,67 +93,52 @@ const LogoAnimation = ({ onStageChange }) => {
         }
       >
         <div className={`relative ${stage === "entrance" ? "animate-netflix-entrance" : ""}`}>
-          {/* White glow instead of red */}
-          <div className={`absolute inset-0 rounded-full bg-white blur-3xl animate-pulse-glow opacity-60 ${isTransitioning ? "scale-50" : ""}`} />
+          {/* Glow effect */}
+          <div className={`absolute inset-0 rounded-full bg-white blur-xl animate-pulse-glow opacity-40 ${isTransitioning ? "scale-50" : ""}`} />
 
+          {/* Main logo container */}
           <div
-            className={`relative rounded-full bg-red shadow-2xl flex items-center justify-center transition-all duration-1000 ${
-              isTransitioning ? "w-10 h-10" : "w-80 h-80"
-            } border-4 border-white/40`}
+            className={`relative rounded-full bg-gradient-to-br from-red-600 to-pink-600 shadow-2xl flex items-center justify-center transition-all duration-500 ${
+              isTransitioning ? "w-8 h-8" : "w-48 h-48 sm:w-64 sm:h-64"
+            } border-2 border-white/30`}
           >
             <div
-              className={`rounded-full bg-black/90 backdrop-blur-xl flex items-center justify-center transition-all duration-1000 ${
-                isTransitioning ? "w-8 h-8" : "w-72 h-72"
+              className={`rounded-full bg-black/80 backdrop-blur-xl flex items-center justify-center transition-all duration-500 ${
+                isTransitioning ? "w-6 h-6" : "w-40 h-40 sm:w-56 sm:h-56"
               }`}
             >
               <div className="text-center">
                 <div
-                  className={`font-black text-white tracking-tighter transition-all duration-1000 ${
-                    isTransitioning ? "text-xs" : "text-9xl"
+                  className={`font-black text-white transition-all duration-500 ${
+                    isTransitioning ? "text-xs" : "text-4xl sm:text-6xl"
                   }`}
                   style={{
-                    textShadow: "0 0 40px #ffffff, 0 0 80px #ffffff",
-                    letterSpacing: isTransitioning ? "0" : "-0.1em",
+                    textShadow: "0 0 20px #ffffff, 0 0 40px #ffffff",
                   }}
                 >
                   AI
                 </div>
-                <div
-                  className={`font-bold text-white/90 tracking-widest transition-all duration-1000 ${
-                    isTransitioning ? "text-0 opacity-0" : "text-3xl mt-2"
-                  }`}
-                  style={{ textShadow: "0 0 20px #ffffff" }}
-                >
-                  CHAT
-                </div>
+                {!isTransitioning && (
+                  <div
+                    className="font-bold text-white/90 tracking-widest transition-all duration-500 text-lg sm:text-2xl mt-2"
+                    style={{ textShadow: "0 0 10px #ffffff" }}
+                  >
+                    CHAT
+                  </div>
+                )}
               </div>
-            </div>
-
-            {/* Soft white orbiting dot */}
-            <div
-              className={`absolute inset-0 animate-spin transition-all duration-1000 ${isTransitioning ? "opacity-0 scale-0" : "opacity-100"}`}
-              style={{ animationDuration: "8s" }}
-            >
-              <div
-                className={`absolute top-0 left-1/2 bg-white rounded-full -translate-x-1/2 shadow-lg transition-all duration-1000 ${
-                  isTransitioning ? "w-0 h-0" : "w-5 h-5"
-                }`}
-                style={{
-                  boxShadow: isTransitioning ? "none" : "0 0 16px #ffffff, 0 0 32px #ffffff",
-                }}
-              />
             </div>
           </div>
         </div>
       </div>
 
-      {/* Clean white “TUDUM” */}
+      {/* Loading text */}
       {stage === "entrance" && (
-        <div className="absolute bottom-32 left-1/2 -translate-x-1/2 text-center">
-          <div className="text-white text-2xl font-bold tracking-widest animate-pulse" style={{ textShadow: "0 0 30px #ffffff" }}>
-            Initializing AI engine...
+        <div className="absolute bottom-20 sm:bottom-32 left-1/2 -translate-x-1/2 text-center">
+          <div className="text-white text-lg sm:text-xl font-semibold tracking-widest animate-pulse">
+            File Chat AI
           </div>
-          <div className="text-white/60 text-xl mt-4">loading...</div>
+          <div className="text-white/60 text-sm sm:text-base mt-2">Loading your workspace...</div>
         </div>
       )}
     </div>
