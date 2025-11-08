@@ -21,7 +21,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Document Chat AI", version="2.1.0")
+app = FastAPI(title="Document Chat AI", version="2.2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -36,7 +36,6 @@ class QueryRequest(BaseModel):
 
 def get_or_create_session_id(request: Request, response: Response, session_id: Optional[str] = None) -> str:
     """Enhanced session management with better validation"""
-    # Clean up expired sessions periodically (5% chance to reduce overhead)
     if random.random() < 0.05:
         try:
             cleaned = manager.cleanup_expired_sessions()
@@ -45,7 +44,6 @@ def get_or_create_session_id(request: Request, response: Response, session_id: O
         except Exception as e:
             logger.error(f"Cleanup error: {e}")
     
-    # Priority: provided session_id → header → cookie → new session
     sources = [
         session_id,
         request.headers.get("X-Session-ID"),
@@ -62,14 +60,13 @@ def get_or_create_session_id(request: Request, response: Response, session_id: O
                 logger.warning(f"Session validation error: {e}")
                 continue
     
-    # Create new session
     try:
         sid = manager.create_session()
         logger.info(f"🆕 NEW SESSION: {sid[:8]}...")
         response.set_cookie(
             key="session_id",
             value=sid,
-            max_age=1800,  # 30 minutes
+            max_age=1800,
             httponly=True,
             samesite="lax"
         )
@@ -84,9 +81,10 @@ async def root():
         stats = manager.get_session_stats()
         return {
             "status": "ONLINE",
-            "message": "Document Chat AI is LIVE on Hugging Face Spaces",
+            "message": "Document Chat AI v2.2 with Conversation History",
             "sessions": stats['active_sessions'],
             "total_sessions": stats['total_sessions'],
+            "conversation_items": stats.get('total_conversation_items', 0),
             "memory_mb": stats.get('memory_usage_mb', 0)
         }
     except Exception as e:
@@ -135,7 +133,7 @@ async def get_session_info(
     request: Request = None,
     response: Response = None
 ):
-    """Get session info"""
+    """Get session info including conversation history length"""
     try:
         sid = get_or_create_session_id(request, response, session_id)
         info = manager.get_session_info(sid)
@@ -148,8 +146,48 @@ async def get_session_info(
             "chunk_count": 0,
             "has_documents": False,
             "ready": False,
+            "conversation_length": 0,
             "error": str(e)
         }
+
+@app.get("/session/history")
+async def get_conversation_history(
+    session_id: Optional[str] = Query(None),
+    limit: Optional[int] = Query(None, description="Limit number of history items"),
+    request: Request = None,
+    response: Response = None
+):
+    """Get conversation history for a session"""
+    try:
+        sid = get_or_create_session_id(request, response, session_id)
+        history = manager.get_conversation_history(sid, limit=limit)
+        return {
+            "session_id": sid,
+            "history": history,
+            "count": len(history)
+        }
+    except Exception as e:
+        logger.error(f"❌ Get history error: {e}")
+        raise HTTPException(500, f"Failed to get history: {str(e)}")
+
+@app.delete("/session/history")
+async def clear_conversation_history(
+    session_id: Optional[str] = Query(None),
+    request: Request = None,
+    response: Response = None
+):
+    """Clear conversation history for a session"""
+    try:
+        sid = get_or_create_session_id(request, response, session_id)
+        manager.clear_conversation_history(sid)
+        return {
+            "status": "cleared",
+            "session_id": sid,
+            "message": "Conversation history cleared successfully"
+        }
+    except Exception as e:
+        logger.error(f"❌ Clear history error: {e}")
+        raise HTTPException(500, f"Failed to clear history: {str(e)}")
 
 @app.get("/session/stats")
 async def get_session_stats():
@@ -186,6 +224,7 @@ async def health():
             "active_sessions": stats['active_sessions'],
             "total_sessions": stats['total_sessions'],
             "sessions_with_documents": stats['sessions_with_documents'],
+            "conversation_items": stats.get('total_conversation_items', 0),
             "memory_usage_mb": stats.get('memory_usage_mb', 0),
             "platform": "Hugging Face Spaces"
         }
@@ -203,7 +242,7 @@ async def upload_document(
     request: Request = None,
     response: Response = None
 ):
-    """Upload PDF/DOCX/DOC"""
+    """Upload PDF/DOCX/DOC (clears conversation history)"""
     try:
         sid = get_or_create_session_id(request, response, session_id)
         logger.info(f"📤 UPLOAD → Session: {sid[:8]}... | File: {file.filename}")
@@ -228,7 +267,8 @@ async def upload_document(
             "filename": file.filename,
             "session_id": sid,
             "chunks": info.get("chunk_count", 0),
-            "ready": info.get("ready", False)
+            "ready": info.get("ready", False),
+            "message": "Document uploaded and conversation history cleared"
         }
     except HTTPException:
         raise
@@ -243,7 +283,7 @@ async def query_document(
     request: Request = None,
     response: Response = None
 ):
-    """Query document"""
+    """Query document with conversation history context"""
     try:
         sid = get_or_create_session_id(request, response, session_id)
         q = request_body.question.strip()
@@ -253,16 +293,17 @@ async def query_document(
         if not q:
             raise HTTPException(400, "Question cannot be empty")
 
-        # Check if session has documents
         session_info = manager.get_session_info(sid)
         if not session_info.get('has_documents'):
             raise HTTPException(400, "No document uploaded yet. Upload one first.")
 
+        # Query includes conversation history context
         answer = manager.query_session(sid, q)
         
         return {
             "response": answer,
-            "session_id": sid
+            "session_id": sid,
+            "conversation_length": session_info.get('conversation_length', 0) + 1
         }
     except HTTPException:
         raise
@@ -276,11 +317,11 @@ async def query_document(
 @app.on_event("startup")
 async def startup():
     logger.info("\n" + "="*60)
-    logger.info("🚀 ENHANCED DOCUMENT CHAT AI v2.1 - HF SPACES")
+    logger.info("🚀 DOCUMENT CHAT AI v2.2 - WITH CONVERSATION MEMORY")
+    logger.info("💬 New: Context-aware conversation history")
     logger.info("💡 Features: Memory management • Auto-cleanup • Error recovery")
     logger.info("="*60 + "\n")
     
-    # Initial cleanup on startup
     try:
         cleaned = manager.cleanup_expired_sessions()
         logger.info(f"🧹 Cleaned up {cleaned} expired sessions on startup")
@@ -305,7 +346,6 @@ def signal_handler(signum, frame):
         logger.error(f"Error during signal handler cleanup: {e}")
     sys.exit(0)
 
-# Register signal handlers
 signal.signal(signal.SIGTERM, signal_handler)
 signal.signal(signal.SIGINT, signal_handler)
 

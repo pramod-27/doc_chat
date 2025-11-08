@@ -28,23 +28,23 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class EnhancedSessionManager:
-    """Thread-safe session manager with robust error handling and resource management"""
+    """Thread-safe session manager with conversation history support"""
     
     _embeddings_instance = None
     _embeddings_lock = threading.Lock()
     
     def __init__(self):
         self.sessions: Dict[str, Dict[str, Any]] = {}
-        self.timeout = int(os.getenv('SESSION_TIMEOUT', 1800))  # 30 minutes default
+        self.timeout = int(os.getenv('SESSION_TIMEOUT', 1800))
         self.max_sessions = int(os.getenv('MAX_SESSIONS', 50))
         self.cleanup_interval = int(os.getenv('CLEANUP_INTERVAL', 300))
-        self.lock = threading.RLock()  # Reentrant lock for nested access
+        self.max_history_length = int(os.getenv('MAX_HISTORY_LENGTH', 10))  # Keep last 10 exchanges
+        self.lock = threading.RLock()
         self.is_shutting_down = False
         self._cleanup_in_progress = False
         
-        logger.info("🚀 Initializing Enhanced SessionManager v2.1...")
+        logger.info("🚀 Initializing Enhanced SessionManager with Conversation History...")
         
-        # Load embeddings once for all sessions
         self._initialize_embeddings()
         
         self.text_splitter = RecursiveCharacterTextSplitter(
@@ -54,11 +54,10 @@ class EnhancedSessionManager:
             separators=["\n\n", "\n", " ", ""]
         )
         
-        # Start background cleanup thread
         self._start_cleanup_thread()
         
         logger.info(f"✅ SessionManager ready | Timeout: {self.timeout}s | Max: {self.max_sessions}")
-        logger.info(f"📊 Cleanup interval: {self.cleanup_interval}s")
+        logger.info(f"💬 Conversation history enabled | Max length: {self.max_history_length}")
 
     @contextmanager
     def _safe_lock(self, timeout: float = 5.0):
@@ -72,7 +71,7 @@ class EnhancedSessionManager:
             try:
                 self.lock.release()
             except RuntimeError:
-                pass  # Lock already released
+                pass
 
     def _initialize_embeddings(self):
         """Initialize embeddings once and reuse across all sessions"""
@@ -84,7 +83,6 @@ class EnhancedSessionManager:
                     model_name = os.getenv('EMBEDDING_MODEL', 'sentence-transformers/all-MiniLM-L6-v2')
                     cache_folder = os.getenv('TRANSFORMERS_CACHE', '/tmp/models')
                     
-                    # Ensure cache directory exists
                     os.makedirs(cache_folder, exist_ok=True)
                     
                     EnhancedSessionManager._embeddings_instance = HuggingFaceEmbeddings(
@@ -117,15 +115,12 @@ class EnhancedSessionManager:
                     
                     self._cleanup_in_progress = True
                     
-                    # Cleanup expired sessions
                     expired_count = self.cleanup_expired_sessions()
                     if expired_count > 0:
                         logger.info(f"🧹 Cleaned {expired_count} expired sessions")
                     
-                    # Check memory usage
                     self._check_memory_usage()
                     
-                    # Reset error counter on success
                     consecutive_errors = 0
                     
                 except Exception as e:
@@ -136,7 +131,6 @@ class EnhancedSessionManager:
                         logger.critical(f"🚨 Cleanup thread failed {max_consecutive_errors} times, stopping")
                         break
                     
-                    # Exponential backoff
                     time.sleep(min(60 * consecutive_errors, 300))
                 finally:
                     self._cleanup_in_progress = False
@@ -157,17 +151,14 @@ class EnhancedSessionManager:
             memory_info = process.memory_info()
             memory_mb = memory_info.rss / (1024 * 1024)
             
-            # Log memory usage periodically
-            if int(time.time()) % 300 == 0:  # Every 5 minutes
+            if int(time.time()) % 300 == 0:
                 logger.info(f"📊 Memory usage: {memory_mb:.2f}MB | Sessions: {len(self.sessions)}")
             
-            # Aggressive cleanup at 1.5GB
             if memory_mb > 1536:
                 logger.warning(f"⚠️ High memory: {memory_mb:.2f}MB - triggering aggressive cleanup")
                 self._aggressive_cleanup()
                 gc.collect()
                 
-                # Check again after cleanup
                 new_memory = psutil.Process().memory_info().rss / (1024 * 1024)
                 logger.info(f"📉 Memory after cleanup: {new_memory:.2f}MB (freed {memory_mb - new_memory:.2f}MB)")
                 
@@ -182,13 +173,11 @@ class EnhancedSessionManager:
                     logger.info("No sessions to clean")
                     return
                 
-                # Sort by last active time
                 sorted_sessions = sorted(
                     self.sessions.items(),
                     key=lambda x: x[1].get('last_active', 0)
                 )
                 
-                # Remove oldest 40% of sessions
                 sessions_to_remove = max(1, int(len(self.sessions) * 0.4))
                 removed_count = 0
                 
@@ -210,7 +199,6 @@ class EnhancedSessionManager:
                 return
             
             with self._safe_lock():
-                # Re-check inside lock
                 if len(self.sessions) <= self.max_sessions:
                     return
                 
@@ -234,12 +222,8 @@ class EnhancedSessionManager:
             logger.error(f"Session limit enforcement error: {e}")
 
     def _safe_delete_session_internal(self, session_id: str, session_data: Dict[str, Any]) -> bool:
-        """
-        Internal method to safely delete a session (lock must be held by caller)
-        Returns True if successfully deleted, False otherwise
-        """
+        """Internal method to safely delete a session"""
         try:
-            # Cleanup vectorstore if exists
             if session_data.get('vectorstore'):
                 try:
                     vectorstore = session_data['vectorstore']
@@ -249,7 +233,6 @@ class EnhancedSessionManager:
                 except Exception as e:
                     logger.warning(f"⚠️ Vectorstore cleanup failed for {session_id[:8]}: {e}")
             
-            # Remove from sessions dict
             if session_id in self.sessions:
                 del self.sessions[session_id]
                 logger.debug(f"✅ Session deleted: {session_id[:8]}")
@@ -260,7 +243,6 @@ class EnhancedSessionManager:
                 
         except Exception as e:
             logger.error(f"❌ Error deleting session {session_id[:8]}: {e}")
-            # Try to remove from dict anyway
             try:
                 if session_id in self.sessions:
                     del self.sessions[session_id]
@@ -269,9 +251,8 @@ class EnhancedSessionManager:
             return False
 
     def create_session(self) -> str:
-        """Create a new session with automatic limit enforcement"""
+        """Create a new session with conversation history support"""
         try:
-            # Enforce limit before creating new session
             self._enforce_session_limit()
             
             with self._safe_lock():
@@ -285,7 +266,8 @@ class EnhancedSessionManager:
                     'last_active': current_time,
                     'created_at': current_time,
                     'access_count': 0,
-                    'ready': False
+                    'ready': False,
+                    'conversation_history': []  # NEW: Store chat history
                 }
                 
                 logger.info(f"🆕 Session created: {session_id[:8]} | Total: {len(self.sessions)}")
@@ -296,13 +278,9 @@ class EnhancedSessionManager:
             raise RuntimeError(f"Session creation failed: {e}")
 
     def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
-        """
-        Get session with automatic expiration check
-        Returns None if session doesn't exist or is expired
-        """
+        """Get session with automatic expiration check"""
         try:
             with self._safe_lock():
-                # Check if session exists
                 if session_id not in self.sessions:
                     logger.debug(f"Session {session_id[:8]} not found")
                     return None
@@ -310,14 +288,12 @@ class EnhancedSessionManager:
                 session = self.sessions[session_id]
                 current_time = time.time()
                 
-                # Check if expired
                 last_active = session.get('last_active', 0)
                 if current_time - last_active > self.timeout:
                     logger.info(f"⏰ Session {session_id[:8]} expired (inactive for {int(current_time - last_active)}s)")
                     self._safe_delete_session_internal(session_id, session)
                     return None
                 
-                # Update access tracking
                 session['last_active'] = current_time
                 session['access_count'] = session.get('access_count', 0) + 1
                 
@@ -333,16 +309,70 @@ class EnhancedSessionManager:
             return False
         return self.get_session(session_id) is not None
 
+    def add_to_conversation_history(self, session_id: str, question: str, answer: str):
+        """Add a Q&A pair to conversation history"""
+        try:
+            with self._safe_lock():
+                if session_id not in self.sessions:
+                    logger.warning(f"Cannot add history to non-existent session {session_id[:8]}")
+                    return
+                
+                session = self.sessions[session_id]
+                
+                # Initialize history if not exists
+                if 'conversation_history' not in session:
+                    session['conversation_history'] = []
+                
+                # Add new exchange
+                session['conversation_history'].append({
+                    'question': question,
+                    'answer': answer,
+                    'timestamp': time.time()
+                })
+                
+                # Trim history to max length (keep most recent)
+                if len(session['conversation_history']) > self.max_history_length:
+                    session['conversation_history'] = session['conversation_history'][-self.max_history_length:]
+                
+                logger.debug(f"💬 Added to history for {session_id[:8]} | Total: {len(session['conversation_history'])}")
+                
+        except Exception as e:
+            logger.error(f"Error adding to conversation history: {e}")
+
+    def get_conversation_history(self, session_id: str, limit: Optional[int] = None) -> List[Dict[str, str]]:
+        """Get conversation history for a session"""
+        try:
+            session = self.get_session(session_id)
+            if not session:
+                return []
+            
+            history = session.get('conversation_history', [])
+            
+            if limit:
+                return history[-limit:]
+            
+            return history
+            
+        except Exception as e:
+            logger.error(f"Error getting conversation history: {e}")
+            return []
+
+    def clear_conversation_history(self, session_id: str):
+        """Clear conversation history for a session"""
+        try:
+            with self._safe_lock():
+                if session_id in self.sessions:
+                    self.sessions[session_id]['conversation_history'] = []
+                    logger.info(f"🗑️ Cleared conversation history for {session_id[:8]}")
+        except Exception as e:
+            logger.error(f"Error clearing history: {e}")
+
     def cleanup_expired_sessions(self) -> int:
-        """
-        Remove all expired sessions
-        Returns the number of sessions cleaned up
-        """
+        """Remove all expired sessions"""
         expired_sessions: List[Tuple[str, Dict[str, Any]]] = []
         current_time = time.time()
         
         try:
-            # First pass: identify expired sessions (quick read)
             with self._safe_lock(timeout=2.0):
                 for session_id, session_data in list(self.sessions.items()):
                     try:
@@ -351,22 +381,18 @@ class EnhancedSessionManager:
                             expired_sessions.append((session_id, session_data))
                     except Exception as e:
                         logger.warning(f"Error checking session {session_id[:8]}: {e}")
-                        # If we can't check it, consider it for cleanup
                         expired_sessions.append((session_id, session_data))
             
-            # Second pass: delete expired sessions
             if expired_sessions:
                 with self._safe_lock():
                     removed_count = 0
                     for session_id, session_data in expired_sessions:
-                        # Double-check session still exists and is still expired
                         if session_id in self.sessions:
                             if self._safe_delete_session_internal(session_id, session_data):
                                 removed_count += 1
                     
                     if removed_count > 0:
                         logger.info(f"🧹 Cleaned {removed_count} expired sessions")
-                        # Trigger garbage collection after cleanup
                         gc.collect()
                     
                     return removed_count
@@ -399,8 +425,6 @@ class EnhancedSessionManager:
                         logger.error(f"Error cleaning session {session_id[:8]}: {e}")
                 
                 logger.info(f"✅ Cleaned {removed_count}/{len(session_ids)} sessions")
-                
-                # Final garbage collection
                 gc.collect()
                 
         except Exception as e:
@@ -413,6 +437,7 @@ class EnhancedSessionManager:
             active_sessions = 0
             sessions_with_docs = 0
             total_chunks = 0
+            total_history_items = 0
             
             with self._safe_lock(timeout=1.0):
                 total_sessions = len(self.sessions)
@@ -425,10 +450,10 @@ class EnhancedSessionManager:
                             if session_data.get('vectorstore'):
                                 sessions_with_docs += 1
                                 total_chunks += session_data.get('chunk_count', 0)
+                            total_history_items += len(session_data.get('conversation_history', []))
                     except Exception as e:
                         logger.warning(f"Error reading session stats: {e}")
             
-            # Get memory info
             try:
                 process = psutil.Process()
                 memory_mb = process.memory_info().rss / (1024 * 1024)
@@ -440,6 +465,7 @@ class EnhancedSessionManager:
                 'active_sessions': active_sessions,
                 'sessions_with_documents': sessions_with_docs,
                 'total_chunks_stored': total_chunks,
+                'total_conversation_items': total_history_items,
                 'session_timeout_minutes': self.timeout // 60,
                 'max_sessions': self.max_sessions,
                 'memory_usage_mb': round(memory_mb, 2),
@@ -448,26 +474,13 @@ class EnhancedSessionManager:
             
         except TimeoutError:
             logger.warning("Stats collection timeout")
-            return {
-                'total_sessions': 0,
-                'active_sessions': 0,
-                'sessions_with_documents': 0,
-                'total_chunks_stored': 0,
-                'session_timeout_minutes': self.timeout // 60,
-                'max_sessions': self.max_sessions,
-                'memory_usage_mb': 0,
-                'error': 'timeout'
-            }
+            return {'error': 'timeout'}
         except Exception as e:
             logger.error(f"Stats collection error: {e}")
-            return {
-                'total_sessions': 0,
-                'active_sessions': 0,
-                'error': str(e)
-            }
+            return {'error': str(e)}
 
     def add_document_to_session(self, session_id: str, doc_bytes: bytes, filename: str):
-        """Add document to session with comprehensive error handling"""
+        """Add document to session and clear conversation history"""
         session = self.get_session(session_id)
         if not session:
             raise ValueError("Invalid or expired session")
@@ -476,28 +489,23 @@ class EnhancedSessionManager:
         temp_path = None
 
         try:
-            # Create temp directory
             temp_dir = tempfile.mkdtemp(prefix="doc_upload_")
             temp_path = Path(temp_dir) / filename
 
-            # Write file
             with open(temp_path, 'wb') as f:
                 f.write(doc_bytes)
             
             logger.info(f"📄 Processing {filename} ({len(doc_bytes)} bytes)")
 
-            # Extract content
             docs = self._extract_document_content(temp_path, filename)
             
             if not docs:
                 raise ValueError("No text content found in document")
 
-            # Split into chunks
             chunks = self.text_splitter.split_documents(docs)
             logger.info(f"✂️ Split into {len(chunks)} chunks")
 
             with self._safe_lock():
-                # Clean up old vectorstore if exists
                 if session.get("vectorstore"):
                     try:
                         old_vectorstore = session['vectorstore']
@@ -508,29 +516,30 @@ class EnhancedSessionManager:
                     except Exception as e:
                         logger.warning(f"⚠️ Old vectorstore cleanup warning: {e}")
 
-                # Create new vectorstore
                 try:
                     session['vectorstore'] = Chroma.from_documents(
                         documents=chunks,
                         embedding=self.embeddings,
-                        persist_directory=None  # In-memory only
+                        persist_directory=None
                     )
                 except Exception as e:
                     logger.error(f"Vectorstore creation failed: {e}")
                     raise ValueError(f"Failed to create vector index: {e}")
 
-                # Update metadata
                 session['filename'] = filename
                 session['chunk_count'] = len(chunks)
                 session['ready'] = True
                 session['last_active'] = time.time()
+                
+                # Clear conversation history when new document is uploaded
+                session['conversation_history'] = []
+                logger.info(f"🗑️ Cleared conversation history for new document")
 
             logger.info(f"✅ Document loaded: {filename} | {len(chunks)} chunks | Session: {session_id[:8]}")
 
         except Exception as e:
             logger.error(f"❌ Document processing error: {e}")
             
-            # Reset session state on failure
             try:
                 with self._safe_lock():
                     session.update({
@@ -545,7 +554,6 @@ class EnhancedSessionManager:
             raise ValueError(f"Failed to process document: {str(e)}")
             
         finally:
-            # Always clean up temp files
             if temp_dir and os.path.exists(temp_dir):
                 try:
                     shutil.rmtree(temp_dir, ignore_errors=True)
@@ -553,7 +561,6 @@ class EnhancedSessionManager:
                 except Exception as e:
                     logger.warning(f"Temp cleanup warning: {e}")
             
-            # Trigger garbage collection
             gc.collect()
 
     def _extract_document_content(self, file_path: Path, filename: str) -> List[Document]:
@@ -562,7 +569,6 @@ class EnhancedSessionManager:
         
         try:
             if filename.lower().endswith('.pdf'):
-                # Extract PDF content
                 reader = PdfReader(str(file_path))
                 total_pages = len(reader.pages)
                 logger.info(f"📖 PDF has {total_pages} pages")
@@ -580,13 +586,11 @@ class EnhancedSessionManager:
                         continue
                 
             else:
-                # Extract DOCX content
                 text = docx2txt.process(str(file_path))
                 
                 if not text or not text.strip():
                     raise ValueError("No text content found in document")
 
-                # Split into pseudo-pages
                 paragraphs = [p.strip() for p in text.split('\n') if p.strip()]
                 page_num = 1
                 page_text = []
@@ -594,7 +598,6 @@ class EnhancedSessionManager:
                 for para in paragraphs:
                     page_text.append(para)
                     
-                    # Create page when accumulated text exceeds threshold
                     if len('\n'.join(page_text)) > 1500:
                         docs.append(Document(
                             page_content='\n'.join(page_text),
@@ -603,7 +606,6 @@ class EnhancedSessionManager:
                         page_text = []
                         page_num += 1
 
-                # Add remaining text
                 if page_text:
                     docs.append(Document(
                         page_content='\n'.join(page_text),
@@ -619,7 +621,7 @@ class EnhancedSessionManager:
         return docs
 
     def query_session(self, session_id: str, question: str) -> str:
-        """Query document in session"""
+        """Query document in session with conversation history context"""
         session = self.get_session(session_id)
         
         if not session:
@@ -631,15 +633,20 @@ class EnhancedSessionManager:
         try:
             from rag_chain import create_rag_chain
             
-            chain = create_rag_chain(session['vectorstore'])
+            # Get conversation history
+            history = self.get_conversation_history(session_id, limit=5)  # Last 5 exchanges
             
-            # Update last active time
+            # Create chain with history
+            chain = create_rag_chain(session['vectorstore'], conversation_history=history)
+            
             with self._safe_lock():
                 if session_id in self.sessions:
                     self.sessions[session_id]['last_active'] = time.time()
             
-            # Execute query
             answer = chain.invoke(question.strip())
+            
+            # Add to conversation history
+            self.add_to_conversation_history(session_id, question, answer)
             
             return answer
             
@@ -662,6 +669,7 @@ class EnhancedSessionManager:
                 'last_active': 0,
                 'access_count': 0,
                 'expires_in_seconds': 0,
+                'conversation_length': 0,
                 'error': 'Session not found or expired'
             }
         
@@ -679,7 +687,8 @@ class EnhancedSessionManager:
                 'created_at': session.get('created_at', 0),
                 'last_active': last_active,
                 'access_count': session.get('access_count', 0),
-                'expires_in_seconds': int(expires_in)
+                'expires_in_seconds': int(expires_in),
+                'conversation_length': len(session.get('conversation_history', []))
             }
             
         except Exception as e:
@@ -711,7 +720,6 @@ class EnhancedSessionManager:
             return False
 
 
-# Initialize the manager as a singleton
 logger.info("🔧 Initializing SessionManager singleton...")
 try:
     manager = EnhancedSessionManager()
