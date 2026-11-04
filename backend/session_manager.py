@@ -520,6 +520,7 @@ class EnhancedSessionManager:
                     session['vectorstore'] = Chroma.from_documents(
                         documents=chunks,
                         embedding=self.embeddings,
+                        collection_name=f"sess-{session_id}",
                         persist_directory=None
                     )
                 except Exception as e:
