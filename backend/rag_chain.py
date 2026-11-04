@@ -59,7 +59,7 @@ def create_rag_chain(vectorstore, conversation_history: List[Dict[str, str]] = N
         
         llm = ChatGroq(
             api_key=os.getenv("GROQ_API_KEY"),
-            model="llama-3.1-8b-instant",
+            model=os.getenv("LLM_MODEL", "llama-3.3-70b-versatile"),
             temperature=0.2,
             max_tokens=1024
         )
