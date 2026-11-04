@@ -9,6 +9,52 @@ from dotenv import load_dotenv
 import logging
 from typing import List, Dict
 
+import requests
+
+PREFERRED_MODELS = [
+    "openai/gpt-oss-20b",
+    "openai/gpt-oss-120b",
+    "qwen/qwen3-32b",
+    "llama-3.3-70b-versatile",
+    "llama-3.1-8b-instant",
+    "meta-llama/llama-4-scout-17b-16e-instruct",
+]
+_SKIP = ("whisper", "tts", "guard", "orpheus", "safeguard", "embed")
+_chosen_model = None
+
+def pick_groq_model(api_key: str) -> str:
+    """Ask Groq which models this key can use and pick a working one."""
+    global _chosen_model
+    if _chosen_model:
+        return _chosen_model
+    requested = os.getenv("LLM_MODEL")
+    try:
+        r = requests.get(
+            "https://api.groq.com/openai/v1/models",
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=10,
+        )
+        r.raise_for_status()
+        available = [m["id"] for m in r.json().get("data", [])]
+        logger.info(f"Groq models available to this key: {available}")
+    except Exception as e:
+        logger.error(f"Could not list Groq models: {e}")
+        return requested or PREFERRED_MODELS[0]
+
+    for m in ([requested] if requested else []) + PREFERRED_MODELS:
+        if m in available:
+            _chosen_model = m
+            logger.info(f"Using Groq model: {m}")
+            return m
+
+    for m in available:
+        if not any(s in m.lower() for s in _SKIP):
+            _chosen_model = m
+            logger.info(f"Using Groq model: {m}")
+            return m
+
+    raise RuntimeError("This Groq key has no chat models available")
+
 load_dotenv()
 logger = logging.getLogger(__name__)
 
@@ -57,11 +103,14 @@ def create_rag_chain(vectorstore, conversation_history: List[Dict[str, str]] = N
             search_kwargs={"k": 6}
         )
         
+        raw_key = (os.getenv("GROQ_API_KEY") or "").strip().strip('"').strip("'")
+        groq_key = raw_key.removeprefix("GROQ_API_KEY=").strip()
+
         llm = ChatGroq(
-            api_key=os.getenv("GROQ_API_KEY"),
-            model=os.getenv("LLM_MODEL", "llama-3.3-70b-versatile"),
+            api_key=groq_key,
+            model=pick_groq_model(groq_key),
             temperature=0.2,
-            max_tokens=1024
+            max_tokens=2048
         )
         
         # Format history once (outside the chain)
